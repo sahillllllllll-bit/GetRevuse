@@ -176,7 +176,7 @@ export function useCreateCampaign(onSuccess) {
       };
 
       // Use the configured API instance which includes auth interceptors
-      const response = await api.post('/campaigns', payload);
+      const response = await api.post('/api/campaigns', payload);
       onSuccess?.(response.data);
     } catch (err) {
       setSubmitError(err.message || "Something went wrong. Please try again.");
