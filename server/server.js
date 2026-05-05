@@ -19,11 +19,17 @@ const paymentRoutes   = require('./routes/paymentRoutes');
 
 
 const admin = require("firebase-admin");
-const serviceAccount = require("./config/serviceAccountKey.json");
+// const serviceAccount = require("./config/serviceAccountKey.json");
+
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf-8")
+);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
+
+
 
 const app = express();
 
@@ -49,8 +55,26 @@ app.use('/api/f',          feedbackRoutes);
 app.use('/api/feedback',   feedbackRoutes);   // alias for dashboard
 app.use('/api/user',       userRoutes);
 app.use('/api/webhooks',   webhookRoutes);
-app.use('api/payments', paymentRoutes)
+app.use('/api/payments', paymentRoutes)
 
+app.get("/test-firebase", async (req, res) => {
+  try {
+    const db = admin.firestore();
+
+    await db.collection("test").doc("ping").set({
+      ok: true,
+      time: new Date().toISOString(),
+    });
+
+    res.json({ success: true, message: "Firebase working ✅" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
 // Error handling
 app.use(notFound);
 app.use(globalErrorHandler);
@@ -59,3 +83,4 @@ app.use(globalErrorHandler);
 connectDB().then(() => {
   app.listen(5000, () => console.log("Server running on 5000"));
 });
+

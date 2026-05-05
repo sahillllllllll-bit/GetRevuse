@@ -33,8 +33,8 @@ const steps = [
   },
   {
     title: "Choose a Plan & Recharge Credits",
-    desc: "Pick a plan that fits your needs — Starter (Free, 100 credits), Pro ($19.99/mo, 1,000 credits), Growth ($49.99/mo, 3,000 credits), or Enterprise (Custom). Credits never expire and can be used for email or SMS campaigns.",
-    img: "https://res.cloudinary.com/dmhykhefr/image/upload/v1777831114/Screenshot_2026-05-03_232642_ia5sdx.png", // Screenshot 7 - Pricing/Recharge page
+    desc: "Enter Your desired Amount and pay. Credits never expire and can be used for email or SMS campaigns.",
+    img: "https://res.cloudinary.com/dmhykhefr/image/upload/v1777969967/Screenshot_2026-05-05_140044_tqonwa.png", // Screenshot 7 - Pricing/Recharge page
   },
 ];
 
