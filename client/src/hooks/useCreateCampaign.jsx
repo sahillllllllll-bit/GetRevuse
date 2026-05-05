@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { auth } from "../firebase/config";
+import api from "../utils/api";
 import {
   DEFAULT_EMAIL_TEMPLATES,
   DEFAULT_SMS_TEMPLATES,
@@ -174,35 +175,9 @@ export function useCreateCampaign(onSuccess) {
         },
       };
 
-      // Get Firebase ID token from current user
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error('You must be logged in to create a campaign');
-      }
-      
-      const token = await user.getIdToken();
-
-      const res   = await fetch("/api/campaigns", {
-        method:  "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const contentType = res.headers.get("content-type");
-        if (contentType?.includes("application/json")) {
-          const data = await res.json();
-          throw new Error(data.message || "Failed to create campaign");
-        } else {
-          throw new Error("Server error: Invalid response format");
-        }
-      }
-
-      const data = await res.json();
-      onSuccess?.(data);
+      // Use the configured API instance which includes auth interceptors
+      const response = await api.post('/campaigns', payload);
+      onSuccess?.(response.data);
     } catch (err) {
       setSubmitError(err.message || "Something went wrong. Please try again.");
     } finally {
