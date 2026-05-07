@@ -141,14 +141,17 @@ const submitFeedback = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Page not found' });
   }
 
-  if (!starRating) {
-    return res.status(400).json({ success: false, message: 'Star rating is required' });
+  // Always parse starRating as integer — body may send string
+  const starRatingNum = parseInt(starRating, 10);
+
+  if (!starRatingNum || starRatingNum < 1 || starRatingNum > 5) {
+    return res.status(400).json({ success: false, message: 'Star rating (1-5) is required' });
   }
 
   const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || null;
   const userAgent = req.headers['user-agent'] || null;
 
-  const isPositive = starRating >= page.threshold;
+  const isPositive = starRatingNum >= page.threshold;
 
   // Save submission
   const submission = await FeedbackSubmission.create({
@@ -156,7 +159,7 @@ const submitFeedback = asyncHandler(async (req, res) => {
     customerId:     cid || null,
     userId:         page.userId,
     slug,
-    starRating,
+    starRating:     starRatingNum,
     routingOutcome: isPositive ? 'positive' : 'negative',
     fields: {
       name:    fields.name    || null,
@@ -188,12 +191,15 @@ const submitFeedback = asyncHandler(async (req, res) => {
     eventType:  'feedback_submitted',
     channel:    null,
     metadata:   {
-      starRating,
+      starRating: starRatingNum,
       feedbackText: fields.message || null,
       ipAddress,
     },
   });
 
+  // Increment campaign stats based on routing outcome
+  const statField = isPositive ? 'totalPositiveRouted' : 'totalNegativeRouted';
+  await Campaign.incrementStat(page.campaignId, statField);
   await Campaign.incrementStat(page.campaignId, 'totalFeedback');
 
   return success(res, {

@@ -1,8 +1,7 @@
 // frontend/src/hooks/useReviews.js
 import { useState, useEffect, useCallback } from "react";
 import { getAuth } from "firebase/auth";
-
-const API = import.meta.env.REACT_APP_API_URL || "http://localhost:5000/api";
+const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const getToken = async () => {
   const user = getAuth().currentUser;

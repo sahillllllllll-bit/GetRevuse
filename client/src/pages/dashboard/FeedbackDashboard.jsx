@@ -74,8 +74,8 @@ export default function FeedbackDashboard() {
           value={stats?.newCount ?? 0} sub="Needs attention" color="orange" />
         {/* <StatCard icon={<Star size={18} />} label="Avg Rating"
           value={avgRating ? `${avgRating}★` : "—"} color="purple" /> */}
-        <StatCard icon={<CheckCircle2 size={18} />} label="Positive Routed"
-          value={stats?.positive ?? 0} sub="Sent to review link" color="green" />
+        {/* <StatCard icon={<CheckCircle2 size={18} />} label="Positive Routed"
+          value={stats?.positive ?? 0} sub="Sent to review link" color="green" /> */}
       </div>
 
       {/* ── Filters ─────────────────────────────────────────── */}

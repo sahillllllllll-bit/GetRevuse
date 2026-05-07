@@ -54,22 +54,34 @@ const CHANNEL_COLORS = {
             ring:   "ring-purple-200 dark:ring-purple-800" },
 };
 
-function ChannelCard({ ch, selected, onClick }) {
+function ChannelCard({ ch, selected, onClick, disabled }) {
   const col = CHANNEL_COLORS[ch.color];
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 min-w-0 flex flex-col items-center gap-1.5 p-3.5 rounded-xl border-2 transition-all text-center
-        ${selected
-          ? `${col.active} ring-2 ${col.ring} shadow-sm`
-          : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600"
-        }`}
-    >
-      <span className="text-2xl">{ch.icon}</span>
-      <span className="text-xs font-bold leading-tight">{ch.label}</span>
-      <span className="text-[10px] opacity-70 leading-tight hidden sm:block">{ch.desc}</span>
-    </button>
+    <div className="relative flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className={`w-full flex flex-col items-center gap-1.5 p-3.5 rounded-xl border-2 transition-all text-center
+          ${disabled 
+            ? "opacity-40 cursor-not-allowed border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-900 text-gray-400 dark:text-gray-600"
+            : selected
+            ? `${col.active} ring-2 ${col.ring} shadow-sm cursor-pointer`
+            : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer"
+          }`}
+      >
+        <span className="text-2xl">{ch.icon}</span>
+        <span className="text-xs font-bold leading-tight">{ch.label}</span>
+        <span className="text-[10px] opacity-70 leading-tight hidden sm:block">{ch.desc}</span>
+      </button>
+      {disabled && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-xs font-bold text-red-600 dark:text-red-400 bg-white dark:bg-gray-900 px-2 py-1 rounded-lg">
+            Launching in 7 days
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -286,8 +298,19 @@ export default function Step1_Basics({ form, update, errors, applyCSV, applyManu
               ch={ch}
               selected={form.channel === ch.value}
               onClick={() => update("channel", ch.value)}
+              disabled={ch.value !== "email"}
             />
           ))}
+        </div>
+        
+        {/* Coming Soon Warning */}
+        <div className="mt-1 p-1 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 flex items-start gap-2">
+          {/* <span className="text-lg"></span> */}
+          <div>
+            <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-400">
+              SMS only  and Both Email and sms  options will come soon
+            </p>
+          </div>
         </div>
       </Field>
 

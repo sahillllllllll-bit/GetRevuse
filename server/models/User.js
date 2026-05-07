@@ -54,7 +54,7 @@ const userSchema = new mongoose.Schema({
   // ── Credits ──────────────────────────────────────────────────
   credits: {
     type: Number,
-    default: parseInt(process.env.DEFAULT_FREE_CREDITS || '100', 10),
+    default: parseInt(process.env.DEFAULT_FREE_CREDITS || '50', 10),
     min: 0,
   },
 
