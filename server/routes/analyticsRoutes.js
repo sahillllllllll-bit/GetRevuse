@@ -1,60 +1,37 @@
 const express = require('express');
 const router  = express.Router();
-
-const { auth, optionalAuth }  = require('../middlewares/auth');
+const { auth } = require('../middlewares/auth');
 const {
+  getDashboard,
   getCampaignStats,
   getCustomerList,
+  getDailyStats,
+  getDashboardDaily,
+  getQuota,
   exportCustomers,
   logEvent,
-  getCampaignLogs,
+  getCacheStats,
 } = require('../controllers/analyticsController');
 
-// ─── Protected analytics routes (require auth) ────────────────────────────────
-
-/**
- * GET /api/analytics/:campaignId/stats
- * Full analytics summary: overview counts, rates, event summary, daily chart data
- */
-router.get('/:campaignId/stats', auth, getCampaignStats);
-
-/**
- * GET /api/analytics/:campaignId/customers
- * Paginated customer list with filters
- * Query: page, limit, status, routing, search, opened, clicked, feedback
- */
-router.get('/:campaignId/customers', auth, getCustomerList);
-
-/**
- * GET /api/analytics/:campaignId/export
- * Download all customers as CSV
- */
-router.get('/:campaignId/export', auth, exportCustomers);
-
-/**
- * GET /api/analytics/:campaignId/logs
- * Paginated event log for a campaign
- * Query: page, limit, eventType, customerId
- */
-router.get('/:campaignId/logs', auth, getCampaignLogs);
-
-// ─── Public / semi-public tracking endpoint ───────────────────────────────────
-
-/**
- * POST /api/analytics/log
- * Record a tracking event from email pixel, redirect, or feedback form.
- *
- * This endpoint does NOT require full auth — it's called by:
- *   - Email tracking pixels (no user session)
- *   - Review link redirect handler
- *   - Feedback form submit
- *
- * Body: { campaignId, customerId, eventType, channel?, metadata? }
- *
- * eventType options:
- *   email_opened | link_clicked | star_rated | feedback_submitted
- *   delivered | bounced | failed | unsubscribed
- */
+// ── Public ──────────────────────────────────────────────────
+// Tracking event (called by email pixel, feedback form)
 router.post('/log', logEvent);
+
+// ── Protected ───────────────────────────────────────────────
+// Dashboard overview
+router.get('/dashboard',        auth, getDashboard);
+router.get('/dashboard/daily',  auth, getDashboardDaily);
+
+// Quota
+router.get('/quota',            auth, getQuota);
+
+// Per-campaign
+router.get('/:campaignId/stats',     auth, getCampaignStats);
+router.get('/:campaignId/customers', auth, getCustomerList);
+router.get('/:campaignId/daily',     auth, getDailyStats);
+router.get('/:campaignId/export',    auth, exportCustomers);
+
+// Dev only
+router.get('/cache/stats', auth, getCacheStats);
 
 module.exports = router;

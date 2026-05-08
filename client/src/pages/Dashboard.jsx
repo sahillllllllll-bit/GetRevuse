@@ -11,6 +11,8 @@ import FeedbackDashboard from "./dashboard/FeedbackDashboard";
 import CampaignsList from "./dashboard/CampaignsList";
 import CreateCampaign from "../components/CreateCampaign/CreateCampaign";
 import CreditsPage from "./dashboard/CreditsPage";
+import AnalyticsDashboard from "./dashboard/AnalyticsDashboard";
+
 
 // 🔽 import your future components
 // import Analytics from "../components/Analytics";
@@ -109,6 +111,19 @@ export const Dashboard = () => {
                         `}
                     >
                         Campaigns
+                    </button>
+
+                    <button
+                        onClick={() => handleTabChange("analytics")}
+                        className={`block w-full text-left p-2 rounded transition
+                        ${
+                            activeTab === "analytics"
+                            ? "bg-gray-100 dark:bg-gray-700"
+                            : "hover:bg-gray-100 dark:hover:bg-gray-700"
+                        }
+                        `}
+                    >
+                        Analytics
                     </button>
 
                     <button
@@ -234,6 +249,10 @@ export const Dashboard = () => {
 
                 {activeTab === "feedback" && (
                   <FeedbackDashboard/>
+                )}
+
+                {activeTab === "analytics" && (
+                  <AnalyticsDashboard/>
                 )}
 
                 {activeTab === "plan" && (
