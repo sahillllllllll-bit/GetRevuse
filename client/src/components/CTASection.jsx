@@ -22,7 +22,7 @@ export default function CTASection({ user }) {
 
         {/* Heading */}
         <h1 className="text-4xl md:text-5xl font-bold text-gray-900 leading-tight">
-          Get More 5-Star Reviews <br />
+         Grow Your Online Reputation <br />
           <span className="text-blue-600">
             Automatically
           </span>
