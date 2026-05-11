@@ -19,17 +19,30 @@ const paymentRoutes   = require('./routes/paymentRoutes');
 
 
 const admin = require("firebase-admin");
-// const serviceAccount = require("./config/serviceAccountKey.json");
 
-const serviceAccount = JSON.parse(
-  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf-8")
-);
+// ✅ Initialize Firebase Admin with better error handling
+try {
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT_BASE64 environment variable not set');
+  }
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+  const serviceAccount = JSON.parse(
+    Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf-8")
+  );
 
-
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log("✅ Firebase Admin initialized successfully");
+  }
+} catch (err) {
+  console.error("❌ CRITICAL: Firebase Admin initialization failed:");
+  console.error("  Error:", err.message);
+  console.error("  This will cause all authenticated requests to fail!");
+  console.error("  Check your FIREBASE_SERVICE_ACCOUNT_BASE64 environment variable");
+  // Don't exit here — let the server start so we can see the error
+}
 
 const app = express();
 
@@ -42,6 +55,16 @@ app.use(express.urlencoded({ extended: true }));
 if (process.env.NODE_ENV !== "test") {
   app.use(morgan("dev"));
 }
+
+// ── Health check endpoint ────────────────────────────────────
+app.get('/api/health', (req, res) => {
+  const firebaseOk = admin.apps.length > 0;
+  res.json({
+    status: 'ok',
+    firebase: firebaseOk ? '✅ initialized' : '❌ NOT initialized',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // ── Tracking (no auth) ────────────────────────────────────────
 app.get('/api/track/open',  trackEmailOpen);
@@ -81,6 +104,12 @@ app.use(globalErrorHandler);
 
 // Start server after DB connects
 connectDB().then(() => {
-  app.listen(5000, () => console.log("Server running on 5000"));
+  app.listen(5000, () => {
+    console.log("🚀 Server running on port 5000");
+    console.log("📋 Check Firebase initialization with: GET /api/health");
+  });
+}).catch((err) => {
+  console.error("❌ Failed to connect to MongoDB:", err.message);
+  process.exit(1);
 });
 

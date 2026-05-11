@@ -28,6 +28,9 @@ import FeedbackFormPage from "../pages/feedback/FeedbackFormPage";
 import { ThankYouPage } from "../pages/feedback/ThankYouPage";
 import CampaignsList from "../pages/dashboard/CampaignsList";
 import CreditsPage from "../pages/dashboard/CreditsPage";
+import PaymentFailed from "../pages/PaymentFailed";
+import PaymentHistory from "../pages/PaymentHistory";
+import PaymentSuccess from "../pages/PaymentSuccess";
 
 
 
@@ -68,15 +71,9 @@ export default function AppRoutes() {
       <Route path="/feedback"   element={<FeedbackDashboard />} />
       <Route path="/credits"    element={<CreditsPage />} />
 
-
-
-
-     
-
-
-    
-
-
+       <Route path="/payment/success"  element={<PaymentSuccess />} />
+       <Route path="/payment/failed"   element={<PaymentFailed />} />
+       <Route path="/payment/history"  element={<PaymentHistory />} />
 
       <Route
         path="/dashboard"

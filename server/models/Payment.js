@@ -9,50 +9,50 @@ const paymentSchema = new mongoose.Schema({
     index:   true,
   },
 
-  userId:  { type: String, required: true, index: true }, // Firebase UID
-  email:   { type: String, required: true, lowercase: true },
+  // ── User ─────────────────────────────────────────────────────
+  userId: { type: String, required: true, index: true },
+  email:  { type: String, required: true, lowercase: true },
 
-  // LemonSqueezy identifiers
-  lsOrderId:     { type: String, default: null, index: true },
-  lsVariantId:   { type: String, default: null },
-  lsProductId:   { type: String, default: null },
-  lsCheckoutId:  { type: String, default: null },
-  lsCustomerId:  { type: String, default: null },
+  // ── Razorpay IDs ─────────────────────────────────────────────
+  rzpOrderId:   { type: String, default: null, index: true },
+  rzpPaymentId: { type: String, default: null, index: true },
+  rzpSignature: { type: String, default: null },
 
-  // Plan details
+  // ── Plan ─────────────────────────────────────────────────────
   plan: {
-    type: String,
-    enum: ['starter', 'pro', 'growth', 'custom'],
+    type:     String,
+    enum:     ['starter', 'pro', 'growth', 'custom'],
     required: true,
   },
 
-  // Amount in cents
-  amountCents:  { type: Number, required: true },
-  amountUSD:    { type: Number, required: true },  // e.g. 19.99
-  currency:     { type: String, default: 'USD' },
+  // ── Amount ───────────────────────────────────────────────────
+  // Stored in smallest unit: paise for INR, cents for USD
+  amountPaise:  { type: Number, default: null }, // e.g. 149900 = ₹1499
+  amountUSD:    { type: Number, default: null }, // e.g. 19.99
+  displayAmount:{ type: Number, default: null }, // what user sees
+  currency:     { type: String, default: 'INR' },
 
-  // Credits granted
+  // ── Credits ──────────────────────────────────────────────────
   creditsAdded: { type: Number, required: true },
 
-  // Discount applied
-  discountApplied:  { type: Boolean, default: false },
-  discountPercent:  { type: Number, default: 0 },
-  originalAmountUSD:{ type: Number, default: null },
+  // ── Discount ─────────────────────────────────────────────────
+  discountApplied:   { type: Boolean, default: false },
+  discountPercent:   { type: Number,  default: 0      },
+  originalAmountUSD: { type: Number,  default: null   },
 
-  // Status
+  // ── Custom plan ───────────────────────────────────────────────
+  isCustomAmount: { type: Boolean, default: false },
+
+  // ── Status ───────────────────────────────────────────────────
   status: {
-    type:  String,
-    enum:  ['pending', 'paid', 'failed', 'refunded'],
-    default: 'pending',
+    type:    String,
+    enum:    ['created', 'paid', 'failed', 'refunded'],
+    default: 'created',
     index:   true,
   },
 
-  // Webhook metadata
-  webhookEvent: { type: String, default: null },
-  processedAt:  { type: Date,   default: null },
-
-  // For custom plans
-  isCustomAmount: { type: Boolean, default: false },
+  failureReason: { type: String, default: null },
+  processedAt:   { type: Date,   default: null },
 }, {
   timestamps: true,
   toJSON:    { virtuals: true },
@@ -60,11 +60,13 @@ const paymentSchema = new mongoose.Schema({
 });
 
 paymentSchema.index({ userId: 1, createdAt: -1 });
-paymentSchema.index({ lsOrderId: 1 });
+paymentSchema.index({ rzpOrderId: 1 });
 
-// Virtual: formatted amount
 paymentSchema.virtual('formattedAmount').get(function () {
-  return `$${this.amountUSD.toFixed(2)}`;
+  if (this.currency === 'INR' && this.amountPaise) {
+    return `₹${(this.amountPaise / 100).toFixed(0)}`;
+  }
+  return `$${this.amountUSD?.toFixed(2) || '0.00'}`;
 });
 
 const Payment = mongoose.model('Payment', paymentSchema);

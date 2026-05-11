@@ -1,56 +1,66 @@
 const express = require('express');
 const router  = express.Router();
-
-const { auth }                       = require('../middlewares/auth');
-const { verifyLemonSqueezyWebhook }  = require('../middlewares/webhookVerify');
+const { auth } = require('../middlewares/auth');
 const {
-  createCheckout,
-  handleWebhook,
-  getPaymentHistory,
-  verifyPayment,
   getPlans,
+  createOrder,
+  verifyPayment,
+  recordFailure,
+  getHistory,
+  getPaymentStatus,
+  handleWebhook,
 } = require('../controllers/paymentController');
 
 // ── Public ────────────────────────────────────────────────────
 
 /**
  * GET /api/payments/plans
- * Returns plan config — credits, prices, discounts
- * Public so pricing page loads without auth
+ * Plan config + Razorpay key (public — needed before login for pricing page)
  */
 router.get('/plans', getPlans);
 
 /**
  * POST /api/payments/webhook
- * LemonSqueezy webhook — must use raw body for sig verification
- * IMPORTANT: register BEFORE express.json() in app.js
+ * Razorpay webhook — raw body needed for signature verification
  */
 router.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
-  verifyLemonSqueezyWebhook,
   handleWebhook
 );
 
-// ── Protected (require auth) ──────────────────────────────────
+// ── Protected ─────────────────────────────────────────────────
 
 /**
- * POST /api/payments/checkout
- * Create checkout session
- * Body: { plan: 'pro'|'growth'|'custom', customAmount?: number }
+ * POST /api/payments/create-order
+ * Step 1: Create Razorpay order before showing payment modal
+ * Body: { plan, customAmount?, currency? }
  */
-router.post('/checkout', auth, createCheckout);
+router.post('/create-order', auth, createOrder);
+
+/**
+ * POST /api/payments/verify
+ * Step 2: Verify signature after successful payment
+ * Body: { rzpOrderId, rzpPaymentId, rzpSignature, paymentId }
+ */
+router.post('/verify', auth, verifyPayment);
+
+/**
+ * POST /api/payments/failed
+ * Record failed/cancelled payment from frontend
+ */
+router.post('/failed', auth, recordFailure);
 
 /**
  * GET /api/payments/history
  * User's payment history
  */
-router.get('/history', auth, getPaymentHistory);
+router.get('/history', auth, getHistory);
 
 /**
- * GET /api/payments/verify?pid=xxx
- * Verify payment after redirect from LemonSqueezy
+ * GET /api/payments/status/:paymentId
+ * Check status of a specific payment
  */
-router.get('/verify', auth, verifyPayment);
+router.get('/status/:paymentId', auth, getPaymentStatus);
 
 module.exports = router;

@@ -1,27 +1,40 @@
-const axios          = require('axios');
-const User           = require('../models/User');
-const Payment        = require('../models/Payment');
-const { asyncHandler } = require('../middlewares/asyncHandler');
+const Razorpay        = require('razorpay');
+const crypto          = require('crypto');
+const User            = require('../models/User');
+const Payment         = require('../models/Payment');
+const { asyncHandler} = require('../middlewares/asyncHandler');
+
+// ─── Razorpay instance ────────────────────────────────────────
+const razorpay = new Razorpay({
+  key_id:     process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// ─── Currency conversion rates (update periodically) ─────────
+const EXCHANGE_RATES = {
+  USD: 83.5,   // 1 USD = 83.5 INR
+  INR: 1,
+  EUR: 90.5,
+  GBP: 105.0,
+};
 
 // ─── Plan config ──────────────────────────────────────────────
-// Credits per dollar for custom plans
-const CREDITS_PER_DOLLAR = 30;  // $1 = 30 credits
+const CREDITS_PER_DOLLAR = 30;
 
 const PLANS = {
   starter: {
     name:          'Starter',
     amountUSD:     0,
     credits:       100,
-    variantId:     null,  // Free — no payment needed
-    discountPct:   0,
+    isFree:        true,
   },
   pro: {
     name:          'Pro',
     amountUSD:     19.99,
-    originalUSD:   29.99,   // crossed-out price
+    originalUSD:   29.99,
     discountPct:   33,
     credits:       1000,
-    variantId:     process.env.LEMONSQUEEZY_PRO_VARIANT_ID,
+    isFree:        false,
   },
   growth: {
     name:          'Growth',
@@ -29,376 +42,29 @@ const PLANS = {
     originalUSD:   74.99,
     discountPct:   33,
     credits:       3000,
-    variantId:     process.env.LEMONSQUEEZY_GROWTH_VARIANT_ID,
+    isFree:        false,
   },
 };
 
-// ─── LemonSqueezy API helper ──────────────────────────────────
-const lsApi = axios.create({
-  baseURL: 'https://api.lemonsqueezy.com/v1',
-  headers: {
-    Authorization: `Bearer ${process.env.LEMONSQUEEZY_API_KEY}`,
-    Accept:        'application/vnd.api+json',
-    'Content-Type':'application/vnd.api+json',
-  },
-});
+// ─── Helper: USD → paise ──────────────────────────────────────
+function usdToPaise(usd) {
+  return Math.round(usd * EXCHANGE_RATES.USD * 100);
+}
 
-const success = (res, data, code = 200, meta = {}) =>
+function currencyToPaise(amount, currency) {
+  const rate = EXCHANGE_RATES[currency] || EXCHANGE_RATES.USD;
+  return Math.round(amount * rate * 100);
+}
+
+const ok = (res, data, code = 200, meta = {}) =>
   res.status(code).json({ success: true, ...meta, ...data });
 
 // ═══════════════════════════════════════════════════════════════
-// POST /api/payments/checkout
-// Create a LemonSqueezy checkout URL
-// Body: { plan: 'pro'|'growth'|'custom', customAmount?: number }
-// ═══════════════════════════════════════════════════════════════
-const createCheckout = asyncHandler(async (req, res) => {
-  const { uid, email } = req.user;
-  const { plan, customAmount, currency = 'USD' } = req.body;
-
-  // ── Validate plan ───────────────────────────────────────────
-  if (!plan || !['pro', 'growth', 'custom'].includes(plan)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid plan. Must be pro, growth, or custom',
-    });
-  }
-
-  // ── Custom amount plan ──────────────────────────────────────
-  if (plan === 'custom') {
-    const amount = parseFloat(customAmount);
-
-    if (!amount || isNaN(amount) || amount < 5) {
-      return res.status(400).json({
-        success: false,
-        message: 'Minimum custom amount is $5',
-      });
-    }
-
-    if (amount > 999) {
-      return res.status(400).json({
-        success: false,
-        message: 'Maximum custom amount is $999. Contact us for larger amounts.',
-      });
-    }
-
-    const credits    = Math.floor(amount * CREDITS_PER_DOLLAR);
-    const amountCents = Math.round(amount * 100);
-    const variantId   = process.env.LEMONSQUEEZY_CUSTOM_VARIANT_ID;
-
-    if (!variantId) {
-      return res.status(500).json({
-        success: false,
-        message: 'Custom plan not configured. Please contact support.',
-      });
-    }
-
-    // Create pending payment record
-    const payment = await Payment.create({
-      userId:         uid,
-      email,
-      plan:           'custom',
-      amountCents,
-      amountUSD:      amount,
-      creditsAdded:   credits,
-      isCustomAmount: true,
-      status:         'pending',
-    });
-
-    const checkoutUrl = await createLSCheckout({
-      variantId,
-      email,
-      userId:    uid,
-      paymentId: payment.paymentId,
-      amount:    amountCents,
-      name:      `Custom Plan — ${credits} Credits`,
-      custom:    { payment_id: payment.paymentId, credits, plan: 'custom' },
-    });
-
-    return success(res, {
-      checkoutUrl,
-      credits,
-      amountUSD: amount,
-      paymentId: payment.paymentId,
-    });
-  }
-
-  // ── Standard plans (Pro / Growth) ──────────────────────────
-  const planConfig = PLANS[plan];
-  if (!planConfig.variantId) {
-    return res.status(500).json({
-      success: false,
-      message: `${plan} plan variant ID not configured`,
-    });
-  }
-
-  // Create pending payment record
-  const payment = await Payment.create({
-    userId:            uid,
-    email,
-    plan,
-    amountCents:       Math.round(planConfig.amountUSD * 100),
-    amountUSD:         planConfig.amountUSD,
-    originalAmountUSD: planConfig.originalUSD || null,
-    discountApplied:   planConfig.discountPct > 0,
-    discountPercent:   planConfig.discountPct || 0,
-    creditsAdded:      planConfig.credits,
-    status:            'pending',
-  });
-
-  const checkoutUrl = await createLSCheckout({
-    variantId:  planConfig.variantId,
-    email,
-    userId:     uid,
-    paymentId:  payment.paymentId,
-    name:       `${planConfig.name} Plan — ${planConfig.credits} Credits`,
-    custom:     { payment_id: payment.paymentId, credits: planConfig.credits, plan },
-  });
-
-  return success(res, {
-    checkoutUrl,
-    credits:   planConfig.credits,
-    amountUSD: planConfig.amountUSD,
-    paymentId: payment.paymentId,
-  });
-});
-
-// ─── LemonSqueezy checkout creator helper ─────────────────────
-async function createLSCheckout({ variantId, email, userId, paymentId, amount, name, custom }) {
-  const storeId = process.env.LEMONSQUEEZY_STORE_ID;
-  const appUrl  = process.env.APP_BASE_URL || 'http://localhost:3000';
-
-  const payload = {
-    data: {
-      type: 'checkouts',
-      attributes: {
-        checkout_options: {
-          embed:        false,
-          media:        false,
-          logo:         true,
-          desc:         true,
-          discount:     false,
-          skip_trial:   true,
-          subscription_preview: false,
-        },
-        checkout_data: {
-          email,
-          custom: {
-            user_id:    userId,
-            payment_id: paymentId,
-            ...custom,
-          },
-        },
-        product_options: {
-          name,
-          redirect_url:      `${appUrl}/payment/success?pid=${paymentId}`,
-          receipt_link_url:  `${appUrl}/payment/success?pid=${paymentId}`,
-          receipt_thank_you_note: 'Thank you! Your credits have been added to your account.',
-        },
-        // Override price for custom amounts
-        ...(amount && {
-          custom_price: amount,
-        }),
-      },
-      relationships: {
-        store: {
-          data: { type: 'stores', id: String(storeId) },
-        },
-        variant: {
-          data: { type: 'variants', id: String(variantId) },
-        },
-      },
-    },
-  };
-
-  const response = await lsApi.post('/checkouts', payload);
-  return response.data?.data?.attributes?.url;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// POST /api/payments/webhook
-// LemonSqueezy webhook — order_created, order_refunded
-// ═══════════════════════════════════════════════════════════════
-const handleWebhook = asyncHandler(async (req, res) => {
-  const event    = req.headers['x-event-name'];
-  const payload  = req.body;
-
-  console.log(`[Payment Webhook] Event: ${event}`);
-
-  switch (event) {
-
-    // ── Order paid successfully ───────────────────────────────
-    case 'order_created': {
-      const order      = payload.data;
-      const attributes = order.attributes;
-      const meta       = payload.meta?.custom_data || {};
-
-      const lsOrderId   = String(order.id);
-      const paymentId   = meta.payment_id;
-      const creditsStr  = meta.credits;
-      const userId      = meta.user_id;
-      const plan        = meta.plan;
-
-      if (!paymentId || !userId) {
-        console.error('[Webhook] Missing payment_id or user_id in custom data');
-        return res.status(200).json({ received: true }); // 200 to ack
-      }
-
-      // Idempotency — skip if already processed
-      const existing = await Payment.findOne({ lsOrderId });
-      if (existing && existing.status === 'paid') {
-        console.log(`[Webhook] Order ${lsOrderId} already processed`);
-        return res.status(200).json({ received: true });
-      }
-
-      const credits = parseInt(creditsStr, 10);
-      if (!credits || isNaN(credits)) {
-        console.error('[Webhook] Invalid credits in custom data:', creditsStr);
-        return res.status(200).json({ received: true });
-      }
-
-      // Update payment record
-      await Payment.findOneAndUpdate(
-        { paymentId },
-        {
-          $set: {
-            status:       'paid',
-            lsOrderId,
-            lsCustomerId: String(attributes.customer_id || ''),
-            lsProductId:  String(attributes.first_order_item?.product_id || ''),
-            webhookEvent: event,
-            processedAt:  new Date(),
-          },
-        }
-      );
-
-      // Add credits to user atomically
-      const user = await User.findOneAndUpdate(
-        { uid: userId },
-        {
-          $inc: { credits: credits, creditsUsed: 0 },
-          $push: {
-            creditLog: {
-              $each: [{
-                type:         'topup',
-                amount:       credits,
-                balanceAfter: 0,  // will be slightly off but ok
-                note:         `${plan} plan purchase — ${credits} credits`,
-                createdAt:    new Date(),
-              }],
-              $slice: -500,
-            },
-          },
-        },
-        { new: true }
-      );
-
-      if (!user) {
-        console.error(`[Webhook] User not found: ${userId}`);
-      } else {
-        console.log(`[Webhook] ✓ Added ${credits} credits to user ${userId}. New balance: ${user.credits}`);
-      }
-
-      break;
-    }
-
-    // ── Refund ───────────────────────────────────────────────
-    case 'order_refunded': {
-      const order     = payload.data;
-      const lsOrderId = String(order.id);
-      const meta      = payload.meta?.custom_data || {};
-      const userId    = meta.user_id;
-      const credits   = parseInt(meta.credits || '0', 10);
-
-      // Update payment status
-      await Payment.findOneAndUpdate(
-        { lsOrderId },
-        { $set: { status: 'refunded', webhookEvent: event } }
-      );
-
-      // Deduct credits on refund
-      if (userId && credits) {
-        await User.findOneAndUpdate(
-          { uid: userId, credits: { $gte: credits } },
-          {
-            $inc: { credits: -credits },
-            $push: {
-              creditLog: {
-                $each: [{
-                  type:         'refund',
-                  amount:       -credits,
-                  balanceAfter: 0,
-                  note:         `Refund processed — ${credits} credits removed`,
-                  createdAt:    new Date(),
-                }],
-                $slice: -500,
-              },
-            },
-          }
-        );
-        console.log(`[Webhook] Refund: removed ${credits} credits from ${userId}`);
-      }
-
-      break;
-    }
-
-    default:
-      console.log(`[Webhook] Unhandled event: ${event}`);
-  }
-
-  // Always return 200 to LemonSqueezy
-  res.status(200).json({ received: true });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// GET /api/payments/history
-// Get payment history for logged-in user
-// ═══════════════════════════════════════════════════════════════
-const getPaymentHistory = asyncHandler(async (req, res) => {
-  const { uid } = req.user;
-
-  const payments = await Payment.find({ userId: uid })
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .lean();
-
-  return success(res, { payments });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// GET /api/payments/success?pid=xxx
-// Verify payment completed (called after redirect)
-// ═══════════════════════════════════════════════════════════════
-const verifyPayment = asyncHandler(async (req, res) => {
-  const { uid }  = req.user;
-  const { pid }  = req.query;
-
-  if (!pid) {
-    return res.status(400).json({ success: false, message: 'Payment ID required' });
-  }
-
-  const payment = await Payment.findOne({ paymentId: pid, userId: uid });
-
-  if (!payment) {
-    return res.status(404).json({ success: false, message: 'Payment not found' });
-  }
-
-  // Get current credit balance
-  const user = await User.findOne({ uid }).select('credits');
-
-  return success(res, {
-    payment,
-    status:       payment.status,
-    creditsAdded: payment.creditsAdded,
-    currentBalance: user?.credits || 0,
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
 // GET /api/payments/plans
-// Return plan config for frontend (no sensitive data)
+// Return plan config for frontend
 // ═══════════════════════════════════════════════════════════════
 const getPlans = asyncHandler(async (_req, res) => {
-  return success(res, {
+  return ok(res, {
     plans: {
       starter: {
         name:       'Starter',
@@ -425,15 +91,492 @@ const getPlans = asyncHandler(async (_req, res) => {
       },
     },
     creditsPerDollar: CREDITS_PER_DOLLAR,
-    minCustomAmount:  5,
+    minCustomAmount:  0.10,
     maxCustomAmount:  999,
+    exchangeRates:    EXCHANGE_RATES,
+    razorpayKeyId:    process.env.RAZORPAY_KEY_ID,
   });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// POST /api/payments/create-order
+// Create Razorpay order — called before showing payment modal
+// Body: { plan, customAmount?, currency? }
+// ═══════════════════════════════════════════════════════════════
+const createOrder = asyncHandler(async (req, res) => {
+  try {
+    // ✅ Check if user is attached
+    if (!req.user) {
+      console.error('[Payment] req.user is undefined!');
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated',
+        code:    'NO_USER',
+      });
+    }
+
+    const { uid, email } = req.user;
+    
+    if (!uid) {
+      console.error('[Payment] req.user.uid is missing!');
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid user context',
+        code:    'NO_UID',
+      });
+    }
+
+    const { plan, customAmount, currency = 'USD' } = req.body;
+
+    console.log(`[Payment] createOrder called: uid=${uid}, plan=${plan}, amount=${customAmount}, currency=${currency}`);
+
+    // ── Validate ────────────────────────────────────────────────
+    if (!plan || !['pro', 'growth', 'custom'].includes(plan)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid plan. Must be pro, growth, or custom',
+      });
+    }
+
+    if (!EXCHANGE_RATES[currency]) {
+      return res.status(400).json({
+        success: false,
+        message: `Unsupported currency: ${currency}`,
+      });
+    }
+
+    let amountUSD, credits, planName, discountPct, originalUSD;
+
+    // ── Custom amount ────────────────────────────────────────────
+    if (plan === 'custom') {
+      const amt = parseFloat(customAmount);
+      if (!amt || isNaN(amt) || amt < 0.10) {
+        return res.status(400).json({
+          success: false,
+          message: 'Minimum custom amount is $0.10',
+        });
+      }
+      if (amt > 999) {
+        return res.status(400).json({
+          success: false,
+          message: 'Maximum custom amount is $999',
+        });
+      }
+      amountUSD = amt;
+      credits   = Math.floor(amt * CREDITS_PER_DOLLAR);
+      planName  = 'Custom';
+      discountPct = 0;
+      originalUSD = null;
+    } else {
+      // ── Standard plan ────────────────────────────────────────
+      const cfg = PLANS[plan];
+      amountUSD   = cfg.amountUSD;
+      credits     = cfg.credits;
+      planName    = cfg.name;
+      discountPct = cfg.discountPct || 0;
+      originalUSD = cfg.originalUSD || null;
+    }
+
+    // ── Convert to paise (Razorpay uses smallest currency unit) ──
+    const amountPaise = currencyToPaise(amountUSD, currency);
+
+    console.log(`[Payment] Creating Razorpay order: amountPaise=${amountPaise}, credits=${credits}`);
+
+    // ── Create Razorpay order ────────────────────────────────────
+    let rzpOrder;
+    try {
+      rzpOrder = await razorpay.orders.create({
+        amount:   amountPaise,
+        currency: 'INR',               // Razorpay India uses INR
+        receipt:  `rcpt_${Date.now()}`,
+        notes: {
+          userId:   uid,
+          email,
+          plan,
+          credits:  String(credits),
+          amountUSD: String(amountUSD),
+        },
+      });
+      console.log(`[Payment] ✅ Razorpay order created: ${rzpOrder.id}`);
+    } catch (rzpErr) {
+      console.error('[Payment] Razorpay full error:', JSON.stringify(rzpErr, null, 2));
+  console.error('[Payment] Razorpay error keys:', Object.keys(rzpErr));
+  console.error('[Payment] statusCode:', rzpErr.statusCode);
+  console.error('[Payment] error:', rzpErr.error);
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to create payment order. Please try again.',
+        code:    'RZP_ORDER_FAILED',
+      });
+    }
+
+    // ── Save pending payment to DB ───────────────────────────────
+    let payment;
+    try {
+      payment = await Payment.create({
+        userId:            uid,
+        email,
+        rzpOrderId:        rzpOrder.id,
+        plan,
+        amountPaise,
+        amountUSD,
+        displayAmount:     amountUSD,
+        currency,
+        creditsAdded:      credits,
+        discountApplied:   discountPct > 0,
+        discountPercent:   discountPct,
+        originalAmountUSD: originalUSD,
+        isCustomAmount:    plan === 'custom',
+        status:            'created',
+      });
+      console.log(`[Payment] ✅ Payment saved to DB: ${payment.paymentId}`);
+    } catch (dbErr) {
+      console.error('[Payment] Database save failed:', {
+        message: dbErr.message,
+        code: dbErr.code,
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to save payment. Please try again.',
+        code:    'DB_SAVE_FAILED',
+      });
+    }
+
+    console.log(`[Payment] Order created: ${rzpOrder.id} for ${email} — ${credits} credits`);
+
+    return ok(res, {
+      orderId:      rzpOrder.id,
+      paymentId:    payment.paymentId,
+      amountPaise,
+      amountUSD,
+      currency:     'INR',
+      credits,
+      planName,
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+      // Display info for modal
+      displayCurrency: currency,
+      displayAmount:   amountUSD,
+      exchangeRate:    EXCHANGE_RATES[currency],
+    }, 201);
+
+  } catch (err) {
+    // ✅ Catch any unexpected errors
+    console.error('[Payment] Unexpected error in createOrder:', {
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: 'An unexpected error occurred',
+      code:    'UNEXPECTED_ERROR',
+    });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// POST /api/payments/verify
+// Verify Razorpay payment signature after user pays
+// Called immediately after payment modal closes successfully
+// ═══════════════════════════════════════════════════════════════
+const verifyPayment = asyncHandler(async (req, res) => {
+  const { uid }  = req.user;
+  const {
+    rzpOrderId,
+    rzpPaymentId,
+    rzpSignature,
+    paymentId,    // our internal payment doc ID
+  } = req.body;
+
+  // ── All fields required ──────────────────────────────────────
+  if (!rzpOrderId || !rzpPaymentId || !rzpSignature || !paymentId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing payment verification fields',
+    });
+  }
+
+  // ── Find payment record ──────────────────────────────────────
+  const payment = await Payment.findOne({ paymentId, userId: uid });
+  if (!payment) {
+    return res.status(404).json({
+      success: false,
+      message: 'Payment record not found',
+    });
+  }
+
+  // ── Prevent double processing ────────────────────────────────
+  if (payment.status === 'paid') {
+    const user = await User.findOne({ uid }).select('credits');
+    return ok(res, {
+      alreadyProcessed: true,
+      credits:          payment.creditsAdded,
+      currentBalance:   user?.credits || 0,
+      payment,
+    });
+  }
+
+  // ── Verify HMAC signature ────────────────────────────────────
+  // Razorpay signs: orderId + "|" + paymentId with key_secret
+  const body      = `${rzpOrderId}|${rzpPaymentId}`;
+  const expected  = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(body)
+    .digest('hex');
+
+  if (expected !== rzpSignature) {
+    // Signature mismatch — mark as failed
+    payment.status        = 'failed';
+    payment.failureReason = 'Invalid payment signature';
+    payment.processedAt   = new Date();
+    await payment.save();
+
+    console.error(`[Payment] Signature mismatch for order ${rzpOrderId}`);
+
+    return res.status(400).json({
+      success: false,
+      message: 'Payment verification failed. Please contact support.',
+      code:    'SIGNATURE_MISMATCH',
+    });
+  }
+
+  // ── Signature valid — update payment record ──────────────────
+  payment.rzpPaymentId = rzpPaymentId;
+  payment.rzpSignature = rzpSignature;
+  payment.status       = 'paid';
+  payment.processedAt  = new Date();
+  await payment.save();
+
+  // ── Add credits to user atomically ──────────────────────────
+  const credits = payment.creditsAdded;
+
+  const updatedUser = await User.findOneAndUpdate(
+    { uid },
+    {
+      $inc: { credits: credits, creditsUsed: 0 },
+      $push: {
+        creditLog: {
+          $each: [{
+            type:         'topup',
+            amount:       credits,
+            balanceAfter: 0,  // approximate
+            note:         `${payment.plan} plan — ${credits} credits via Razorpay`,
+            createdAt:    new Date(),
+          }],
+          $slice: -500,
+        },
+      },
+    },
+    { new: true }
+  );
+
+  console.log(`[Payment] ✓ Verified: ${rzpPaymentId} — Added ${credits} credits to ${uid}. Balance: ${updatedUser?.credits}`);
+
+  return ok(res, {
+    verified:       true,
+    credits,
+    currentBalance: updatedUser?.credits || 0,
+    payment: {
+      paymentId:    payment.paymentId,
+      plan:         payment.plan,
+      amountUSD:    payment.amountUSD,
+      creditsAdded: payment.creditsAdded,
+      status:       payment.status,
+      processedAt:  payment.processedAt,
+    },
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /api/payments/failed
+// Record failed payment from frontend
+// ═══════════════════════════════════════════════════════════════
+const recordFailure = asyncHandler(async (req, res) => {
+  const { uid }  = req.user;
+  const { paymentId, rzpOrderId, reason, code } = req.body;
+
+  if (!paymentId) {
+    return res.status(400).json({ success: false, message: 'paymentId required' });
+  }
+
+  await Payment.findOneAndUpdate(
+    { paymentId, userId: uid },
+    {
+      $set: {
+        status:        'failed',
+        failureReason: reason || 'Payment cancelled or failed',
+        processedAt:   new Date(),
+      },
+    }
+  );
+
+  console.log(`[Payment] Failed: order ${rzpOrderId} — ${reason}`);
+
+  return ok(res, {}, 200, { message: 'Failure recorded' });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// GET /api/payments/history
+// User's payment history
+// ═══════════════════════════════════════════════════════════════
+const getHistory = asyncHandler(async (req, res) => {
+  const { uid } = req.user;
+
+  const payments = await Payment.find({ userId: uid })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean({ virtuals: true });
+
+  return ok(res, { payments });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// GET /api/payments/status/:paymentId
+// Check status of a specific payment
+// ═══════════════════════════════════════════════════════════════
+const getPaymentStatus = asyncHandler(async (req, res) => {
+  const { uid }       = req.user;
+  const { paymentId } = req.params;
+
+  const payment = await Payment.findOne({ paymentId, userId: uid })
+    .lean({ virtuals: true });
+
+  if (!payment) {
+    return res.status(404).json({ success: false, message: 'Payment not found' });
+  }
+
+  const user = await User.findOne({ uid }).select('credits');
+
+  return ok(res, {
+    payment,
+    currentBalance: user?.credits || 0,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /api/payments/webhook
+// Razorpay webhook for server-side payment confirmation
+// Backup to frontend verification
+// ═══════════════════════════════════════════════════════════════
+const handleWebhook = asyncHandler(async (req, res) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  const signature     = req.headers['x-razorpay-signature'];
+
+  // Verify webhook signature
+  if (webhookSecret && signature) {
+    const body    = JSON.stringify(req.body);
+    const expected = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(body)
+      .digest('hex');
+
+    if (expected !== signature) {
+      console.warn('[Webhook] Invalid Razorpay signature');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+  }
+
+  const event   = req.body?.event;
+  const payload = req.body?.payload;
+
+  console.log(`[Webhook] Razorpay event: ${event}`);
+
+  switch (event) {
+    case 'payment.captured': {
+      const rzpPayment = payload?.payment?.entity;
+      const rzpOrderId = rzpPayment?.order_id;
+      const notes      = rzpPayment?.notes || {};
+
+      if (!rzpOrderId) break;
+
+      // Find payment record
+      const payment = await Payment.findOne({ rzpOrderId });
+      if (!payment || payment.status === 'paid') break;
+
+      // Update payment
+      payment.rzpPaymentId = rzpPayment.id;
+      payment.status       = 'paid';
+      payment.processedAt  = new Date();
+      await payment.save();
+
+      // Add credits if not already added
+      const credits = payment.creditsAdded;
+      const uid     = notes.userId || payment.userId;
+
+      await User.findOneAndUpdate(
+        { uid, credits: { $not: { $gt: payment.creditsAdded + 10000 } } },
+        {
+          $inc: { credits },
+          $push: {
+            creditLog: {
+              $each: [{
+                type:         'topup',
+                amount:       credits,
+                balanceAfter: 0,
+                note:         `${payment.plan} plan (webhook) — ${credits} credits`,
+                createdAt:    new Date(),
+              }],
+              $slice: -500,
+            },
+          },
+        }
+      );
+
+      console.log(`[Webhook] ✓ Payment captured: ${rzpPayment.id}`);
+      break;
+    }
+
+    case 'payment.failed': {
+      const rzpPayment = payload?.payment?.entity;
+      const rzpOrderId = rzpPayment?.order_id;
+
+      if (!rzpOrderId) break;
+
+      await Payment.findOneAndUpdate(
+        { rzpOrderId },
+        {
+          $set: {
+            status:        'failed',
+            failureReason: rzpPayment?.error_description || 'Payment failed',
+            processedAt:   new Date(),
+          },
+        }
+      );
+
+      console.log(`[Webhook] Payment failed: ${rzpPayment?.id}`);
+      break;
+    }
+
+    case 'refund.created': {
+      const refund     = payload?.refund?.entity;
+      const rzpPaymentId = refund?.payment_id;
+
+      if (!rzpPaymentId) break;
+
+      await Payment.findOneAndUpdate(
+        { rzpPaymentId },
+        { $set: { status: 'refunded' } }
+      );
+
+      console.log(`[Webhook] Refund: ${refund?.id}`);
+      break;
+    }
+
+    default:
+      break;
+  }
+
+  res.status(200).json({ received: true });
+});
+
 module.exports = {
-  createCheckout,
-  handleWebhook,
-  getPaymentHistory,
-  verifyPayment,
   getPlans,
+  createOrder,
+  verifyPayment,
+  recordFailure,
+  getHistory,
+  getPaymentStatus,
+  handleWebhook,
 };

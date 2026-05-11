@@ -15,6 +15,7 @@ const auth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('[auth] No authorization header');
       return res.status(401).json({
         success: false,
         message: 'Authorization token is required',
@@ -25,6 +26,7 @@ const auth = async (req, res, next) => {
     const idToken = authHeader.split('Bearer ')[1].trim();
 
     if (!idToken) {
+      console.error('[auth] Empty token after Bearer split');
       return res.status(401).json({
         success: false,
         message: 'Invalid authorization format',
@@ -32,8 +34,68 @@ const auth = async (req, res, next) => {
       });
     }
 
+    // ✅ Check if Firebase Admin is initialized
+    if (!admin.apps.length) {
+      console.error('[auth] Firebase Admin NOT initialized!');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error. Firebase not initialized.',
+        code:    'FIREBASE_NOT_INIT',
+      });
+    }
+
     // Verify the Firebase ID token
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (verifyErr) {
+      // ✅ Log specific token verification errors
+      console.error('[auth] Token verification failed:', {
+        code: verifyErr.code,
+        message: verifyErr.message,
+        tokenLength: idToken.length,
+      });
+      
+      if (verifyErr.code === 'auth/id-token-expired') {
+        return res.status(401).json({
+          success: false,
+          message: 'Token has expired. Please sign in again.',
+          code:    'TOKEN_EXPIRED',
+        });
+      }
+
+      if (verifyErr.code === 'auth/id-token-revoked') {
+        return res.status(401).json({
+          success: false,
+          message: 'Token has been revoked. Please sign in again.',
+          code:    'TOKEN_REVOKED',
+        });
+      }
+
+      if (verifyErr.code === 'auth/argument-error') {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token format.',
+          code:    'INVALID_TOKEN',
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        message: 'Token verification failed.',
+        code:    'VERIFY_FAILED',
+      });
+    }
+
+    // ✅ Check if decoded token has required fields
+    if (!decodedToken.uid) {
+      console.error('[auth] Decoded token missing uid');
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token payload.',
+        code:    'INVALID_PAYLOAD',
+      });
+    }
 
     // Attach user info to request
     req.user = {
@@ -42,6 +104,8 @@ const auth = async (req, res, next) => {
       name:    decodedToken.name    || null,
       picture: decodedToken.picture || null,
     };
+
+    console.log('[auth] ✅ Token verified for user:', req.user.uid);
 
     // ── Auto-create / sync user in MongoDB ────────────────────
     // Runs in background — does NOT block the request
@@ -53,30 +117,12 @@ const auth = async (req, res, next) => {
 
     next();
   } catch (error) {
-    // Handle specific Firebase auth errors
-    if (error.code === 'auth/id-token-expired') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token has expired. Please sign in again.',
-        code:    'TOKEN_EXPIRED',
-      });
-    }
-
-    if (error.code === 'auth/id-token-revoked') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token has been revoked. Please sign in again.',
-        code:    'TOKEN_REVOKED',
-      });
-    }
-
-    if (error.code === 'auth/argument-error') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token format.',
-        code:    'INVALID_TOKEN',
-      });
-    }
+    // ✅ Catch-all error handler with logging
+    console.error('[auth] Unexpected error:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
+    });
 
     return res.status(401).json({
       success: false,
@@ -93,23 +139,39 @@ const auth = async (req, res, next) => {
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
+    
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const idToken = authHeader.split('Bearer ')[1].trim();
-      const decoded = await admin.auth().verifyIdToken(idToken);
-      req.user = {
-        uid:     decoded.uid,
-        email:   decoded.email   || null,
-        name:    decoded.name    || null,
-        picture: decoded.picture || null,
-      };
+      
+      // ✅ Check if Firebase Admin is initialized
+      if (!admin.apps.length) {
+        console.warn('[optionalAuth] Firebase Admin not initialized, skipping token verification');
+        return next();
+      }
 
-      // Also sync user in background for optional auth
-      User.findOrCreate(req.user).catch((err) =>
-        console.error('[optionalAuth] MongoDB user sync error:', err.message)
-      );
+      try {
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        req.user = {
+          uid:     decoded.uid,
+          email:   decoded.email   || null,
+          name:    decoded.name    || null,
+          picture: decoded.picture || null,
+        };
+
+        console.log('[optionalAuth] ✅ Token verified for user:', req.user.uid);
+
+        // Also sync user in background for optional auth
+        User.findOrCreate(req.user).catch((err) =>
+          console.error('[optionalAuth] MongoDB user sync error:', err.message)
+        );
+      } catch (verifyErr) {
+        // ✅ Log token verification errors but don't block
+        console.warn('[optionalAuth] Token verification failed (non-blocking):', verifyErr.code);
+        // Continue without user — this is optional auth
+      }
     }
-  } catch (_) {
-    // Silently ignore — optional auth
+  } catch (err) {
+    console.warn('[optionalAuth] Unexpected error (non-blocking):', err.message);
   }
   next();
 };
