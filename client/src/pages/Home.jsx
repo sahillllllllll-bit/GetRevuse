@@ -5,6 +5,7 @@ import HowItWorks from "../components/HowItWorks";
 import Login from "../pages/Login"; // make sure path is correct
 import CTASection from "../components/CTASection";
 import ReviewMarquee from "../components/ReviewMarquee";
+import VideoPlayer from "../components/VideoPlayer";
 
 export const Home = () => {
   const [user, setUser] = useState(undefined);
@@ -43,6 +44,7 @@ export const Home = () => {
           </div>
         )} */}
        
+        <VideoPlayer/>
         <HowItWorks />
       {/* <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-lg p-6 sm:p-10">
 
